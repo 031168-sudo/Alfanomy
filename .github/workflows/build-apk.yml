@@ -72,6 +72,7 @@ jobs:
           public class MainActivity extends Activity {
               private WebView webView;
               private TextView diagnostics;
+              private String userAgent;
 
               @SuppressLint("SetJavaScriptEnabled")
               @Override public void onCreate(Bundle state) {
@@ -85,6 +86,7 @@ jobs:
                   s.setAllowFileAccess(true);
                   s.setAllowContentAccess(true);
                   s.setMediaPlaybackRequiresUserGesture(false);
+                  userAgent = s.getUserAgentString();
 
                   diagnostics = new TextView(this);
                   diagnostics.setTextColor(Color.WHITE);
@@ -111,7 +113,7 @@ jobs:
                                   c.setReadTimeout(120000);
                                   c.setRequestMethod(request.getMethod());
                                   c.setRequestProperty("Accept-Encoding", "identity");
-                                  c.setRequestProperty("User-Agent", webView.getSettings().getUserAgentString());
+                                  c.setRequestProperty("User-Agent", userAgent);
                                   String cookie = CookieManager.getInstance().getCookie(u);
                                   if (cookie != null) c.setRequestProperty("Cookie", cookie);
                                   for (Map.Entry<String,String> h : request.getRequestHeaders().entrySet()) {

@@ -40,7 +40,7 @@ jobs:
           mkdir project
           unzip -q mapp-project.zip -d project
 
-      - name: Add Android-side response diagnostics
+      - name: Add Android response diagnostic
         working-directory: project
         run: |
           cat > app/src/main/java/ru/alfanomy/mapp/MainActivity.java <<'EOF'
@@ -52,7 +52,7 @@ jobs:
           import android.os.Bundle;
           import android.view.KeyEvent;
           import android.view.ViewGroup;
-          import android.webkit.ConsoleMessage;
+          import android.webkit.CookieManager;
           import android.webkit.WebChromeClient;
           import android.webkit.WebResourceRequest;
           import android.webkit.WebResourceResponse;
@@ -62,6 +62,13 @@ jobs:
           import android.widget.FrameLayout;
           import android.widget.TextView;
 
+          import java.io.ByteArrayInputStream;
+          import java.io.ByteArrayOutputStream;
+          import java.io.InputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.util.Map;
+
           public class MainActivity extends Activity {
               private WebView webView;
               private TextView diagnostics;
@@ -69,10 +76,8 @@ jobs:
               @SuppressLint("SetJavaScriptEnabled")
               @Override public void onCreate(Bundle state) {
                   super.onCreate(state);
-
                   FrameLayout root = new FrameLayout(this);
                   webView = new WebView(this);
-
                   WebSettings s = webView.getSettings();
                   s.setJavaScriptEnabled(true);
                   s.setDomStorageEnabled(true);
@@ -88,64 +93,64 @@ jobs:
                   diagnostics.setPadding(8, 4, 8, 4);
                   diagnostics.setText("DIAG: запуск");
 
-                  FrameLayout.LayoutParams webLp = new FrameLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-                  FrameLayout.LayoutParams diagLp = new FrameLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                  diagLp.gravity = android.view.Gravity.BOTTOM;
-
-                  root.addView(webView, webLp);
-                  root.addView(diagnostics, diagLp);
+                  root.addView(webView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                  FrameLayout.LayoutParams dl = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                  dl.gravity = android.view.Gravity.BOTTOM;
+                  root.addView(diagnostics, dl);
                   setContentView(root);
 
                   webView.setWebViewClient(new WebViewClient() {
                       @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                           String u = request.getUrl().toString();
-                          if (u.contains("server/index.jss") || u.contains("mapp-1.2/server")) {
-                              showDiag("HTTP: " + request.getMethod() + " update/request");
+                          if (u.contains("name=update") && (u.contains("server/index.jss") || u.contains("mapp-1.2/server"))) {
+                              showDiag("UPDATE: запрос");
+                              try {
+                                  URL url = new URL(u);
+                                  HttpURLConnection c = (HttpURLConnection) url.openConnection();
+                                  c.setConnectTimeout(20000);
+                                  c.setReadTimeout(120000);
+                                  c.setRequestMethod(request.getMethod());
+                                  c.setRequestProperty("Accept-Encoding", "identity");
+                                  c.setRequestProperty("User-Agent", webView.getSettings().getUserAgentString());
+                                  String cookie = CookieManager.getInstance().getCookie(u);
+                                  if (cookie != null) c.setRequestProperty("Cookie", cookie);
+                                  for (Map.Entry<String,String> h : request.getRequestHeaders().entrySet()) {
+                                      String k = h.getKey();
+                                      if (!"Cookie".equalsIgnoreCase(k) && !"Accept-Encoding".equalsIgnoreCase(k) && !"Host".equalsIgnoreCase(k)) {
+                                          c.setRequestProperty(k, h.getValue());
+                                      }
+                                  }
+                                  int code = c.getResponseCode();
+                                  InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+                                  byte[] body = readAll(in);
+                                  String ct = c.getContentType();
+                                  if (ct == null) ct = "application/javascript; charset=UTF-8";
+                                  showDiag("UPDATE: HTTP " + code + " / " + body.length + " bytes");
+                                  String text = new String(body, "UTF-8");
+                                  int p = text.indexOf("signalStreams");
+                                  int e = text.indexOf("error");
+                                  showDiag("UPDATE: HTTP " + code + " / " + body.length + " bytes / signalStreams=" + (p >= 0) + " / error=" + (e >= 0));
+                                  return new WebResourceResponse("application/javascript", "UTF-8", code, c.getResponseMessage(), "", new ByteArrayInputStream(body));
+                              } catch (Exception ex) {
+                                  showDiag("UPDATE: ERROR " + ex.getClass().getSimpleName() + ": " + ex.getMessage());
+                              }
                           }
                           return super.shouldInterceptRequest(view, request);
                       }
-
-                      @Override public void onPageFinished(WebView view, String url) {
-                          super.onPageFinished(view, url);
-                          installResponseProbe(view);
-                      }
                   });
-
-                  webView.setWebChromeClient(new WebChromeClient() {
-                      @Override public boolean onConsoleMessage(ConsoleMessage m) {
-                          String msg = m.message();
-                          if (msg != null && msg.contains("__DIAG_UPDATE_RESPONSE__")) {
-                              showDiag("JS: " + msg);
-                          } else if (msg != null && (msg.contains("update") || msg.contains("Update") || msg.contains("session") || msg.contains("connection"))) {
-                              showDiag("JS: " + msg);
-                          }
-                          return true;
-                      }
-                  });
-
+                  webView.setWebChromeClient(new WebChromeClient());
                   WebView.setWebContentsDebuggingEnabled(true);
                   webView.loadUrl("file:///android_asset/index.html");
               }
 
-              private void installResponseProbe(WebView view) {
-                  String script = "javascript:(function(){"
-                          + "if(window.__alfaDiagInstalled)return;window.__alfaDiagInstalled=true;"
-                          + "var open=XMLHttpRequest.prototype.open,send=XMLHttpRequest.prototype.send;"
-                          + "XMLHttpRequest.prototype.open=function(m,u){this.__alfaDiagMethod=m;this.__alfaDiagUrl=String(u);return open.apply(this,arguments)};"
-                          + "XMLHttpRequest.prototype.send=function(){"
-                          + "var x=this,u=this.__alfaDiagUrl||'';"
-                          + "if(u.indexOf('server/index.jss')>=0||u.indexOf('mapp-1.2/server')>=0){"
-                          + "x.addEventListener('load',function(){"
-                          + "try{var raw=x.responseText||'',p=raw.indexOf('('),q=raw.lastIndexOf(')'),o=(p>=0&&q>p)?JSON.parse(raw.substring(p+1,q)):JSON.parse(raw);"
-                          + "var ss=o.signalStreams||{},ks=Object.keys(ss),us=o.userStream?JSON.stringify(o.userStream).length:0;"
-                          + "console.log('__DIAG_UPDATE_RESPONSE__ status='+x.status+' raw='+raw.length+' error='+(o.error||0)+' user='+us+' signals='+ks.length+' keys='+ks.join(','));"
-                          + "}catch(e){console.log('__DIAG_UPDATE_RESPONSE__ status='+x.status+' parse_error='+String(e)+' raw='+(x.responseText||'').length)}"
-                          + "},false);"
-                          + "}return send.apply(this,arguments)};"
-                          + "})()";
-                  view.evaluateJavascript(script, null);
+              private byte[] readAll(InputStream in) throws Exception {
+                  if (in == null) return new byte[0];
+                  ByteArrayOutputStream out = new ByteArrayOutputStream();
+                  byte[] b = new byte[8192];
+                  int n;
+                  while ((n = in.read(b)) != -1) out.write(b, 0, n);
+                  in.close();
+                  return out.toByteArray();
               }
 
               private void showDiag(final String text) {

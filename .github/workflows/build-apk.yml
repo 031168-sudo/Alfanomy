@@ -123,14 +123,12 @@ jobs:
                                   int code = c.getResponseCode();
                                   InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
                                   byte[] body = readAll(in);
-                                  String ct = c.getContentType();
-                                  if (ct == null) ct = "application/javascript; charset=UTF-8";
                                   showDiag("UPDATE: HTTP " + code + " / " + body.length + " bytes");
                                   String text = new String(body, "UTF-8");
                                   int p = text.indexOf("signalStreams");
                                   int e = text.indexOf("error");
                                   showDiag("UPDATE: HTTP " + code + " / " + body.length + " bytes / signalStreams=" + (p >= 0) + " / error=" + (e >= 0));
-                                  return new WebResourceResponse("application/javascript", "UTF-8", code, c.getResponseMessage(), "", new ByteArrayInputStream(body));
+                                  return new WebResourceResponse("application/javascript", "UTF-8", new ByteArrayInputStream(body));
                               } catch (Exception ex) {
                                   showDiag("UPDATE: ERROR " + ex.getClass().getSimpleName() + ": " + ex.getMessage());
                               }

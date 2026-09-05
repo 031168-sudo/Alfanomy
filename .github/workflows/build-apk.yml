@@ -40,7 +40,7 @@ jobs:
           mkdir project
           unzip -q mapp-project.zip -d project
 
-      - name: Add Android-side diagnostics
+      - name: Add Android-side response diagnostics
         working-directory: project
         run: |
           cat > app/src/main/java/ru/alfanomy/mapp/MainActivity.java <<'EOF'
@@ -102,16 +102,23 @@ jobs:
                       @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                           String u = request.getUrl().toString();
                           if (u.contains("server/index.jss") || u.contains("mapp-1.2/server")) {
-                              showDiag("HTTP: " + request.getMethod() + " " + u);
+                              showDiag("HTTP: " + request.getMethod() + " update/request");
                           }
                           return super.shouldInterceptRequest(view, request);
+                      }
+
+                      @Override public void onPageFinished(WebView view, String url) {
+                          super.onPageFinished(view, url);
+                          installResponseProbe(view);
                       }
                   });
 
                   webView.setWebChromeClient(new WebChromeClient() {
                       @Override public boolean onConsoleMessage(ConsoleMessage m) {
                           String msg = m.message();
-                          if (msg != null && (msg.contains("update") || msg.contains("Update") || msg.contains("session") || msg.contains("connection"))) {
+                          if (msg != null && msg.contains("__DIAG_UPDATE_RESPONSE__")) {
+                              showDiag("JS: " + msg);
+                          } else if (msg != null && (msg.contains("update") || msg.contains("Update") || msg.contains("session") || msg.contains("connection"))) {
                               showDiag("JS: " + msg);
                           }
                           return true;
@@ -120,6 +127,25 @@ jobs:
 
                   WebView.setWebContentsDebuggingEnabled(true);
                   webView.loadUrl("file:///android_asset/index.html");
+              }
+
+              private void installResponseProbe(WebView view) {
+                  String script = "javascript:(function(){"
+                          + "if(window.__alfaDiagInstalled)return;window.__alfaDiagInstalled=true;"
+                          + "var open=XMLHttpRequest.prototype.open,send=XMLHttpRequest.prototype.send;"
+                          + "XMLHttpRequest.prototype.open=function(m,u){this.__alfaDiagMethod=m;this.__alfaDiagUrl=String(u);return open.apply(this,arguments)};"
+                          + "XMLHttpRequest.prototype.send=function(){"
+                          + "var x=this,u=this.__alfaDiagUrl||'';"
+                          + "if(u.indexOf('server/index.jss')>=0||u.indexOf('mapp-1.2/server')>=0){"
+                          + "x.addEventListener('load',function(){"
+                          + "try{var raw=x.responseText||'',p=raw.indexOf('('),q=raw.lastIndexOf(')'),o=(p>=0&&q>p)?JSON.parse(raw.substring(p+1,q)):JSON.parse(raw);"
+                          + "var ss=o.signalStreams||{},ks=Object.keys(ss),us=o.userStream?JSON.stringify(o.userStream).length:0;"
+                          + "console.log('__DIAG_UPDATE_RESPONSE__ status='+x.status+' raw='+raw.length+' error='+(o.error||0)+' user='+us+' signals='+ks.length+' keys='+ks.join(','));"
+                          + "}catch(e){console.log('__DIAG_UPDATE_RESPONSE__ status='+x.status+' parse_error='+String(e)+' raw='+(x.responseText||'').length)}"
+                          + "},false);"
+                          + "}return send.apply(this,arguments)};"
+                          + "})()";
+                  view.evaluateJavascript(script, null);
               }
 
               private void showDiag(final String text) {
